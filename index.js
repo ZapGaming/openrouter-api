@@ -3,33 +3,39 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const HF_TOKEN = process.env.HF_TOKEN;
 
-// --- AI LOGIC (GROQ) ---
+// --- AI LOGIC (Hugging Face) ---
 async function getAIResponse(prompt) {
     try {
-        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${GROQ_API_KEY}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                model: "llama-3.3-70b-versatile",
-                messages: [
-                    { role: "system", content: "You are the Chillax Support AI. Be chill, brief, and help with Discord CSS. Use emojis." },
-                    { role: "user", content: prompt }
-                ]
-            })
-        });
-        const data = await res.json();
-        return data.choices?.[0]?.message?.content || "🌊 (Empty response from the void)";
+        const response = await fetch(
+            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3",
+            {
+                headers: { 
+                    Authorization: `Bearer ${HF_TOKEN}`,
+                    "Content-Type": "application/json"
+                },
+                method: "POST",
+                body: JSON.stringify({
+                    inputs: `<s>[INST] You are the Chillax Support AI. Be chill, brief, use emojis, and help with Discord CSS. Answer this: ${prompt} [/INST]`,
+                    parameters: { max_new_tokens: 250, temperature: 0.7 }
+                }),
+            }
+        );
+        
+        const result = await response.json();
+        // Hugging Face returns an array: [{ generated_text: "..." }]
+        let aiText = result[0]?.generated_text || "";
+        
+        // Clean up the prompt from the response if it's included
+        return aiText.split('[/INST]').pop().trim() || "🌊 (HuggingFace is thinking...)";
     } catch (err) {
-        return "⚠️ AI error. Check your GROQ_API_KEY on Render.";
+        console.error(err);
+        return "⚠️ AI error. Make sure HF_TOKEN is correct on Render.";
     }
 }
 
-// --- SONG SEARCH LOGIC (Songlink) ---
+// --- SONG SEARCH LOGIC ---
 async function searchSong(query) {
     try {
         const res = await fetch(`https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(query)}&userCountry=US`);
@@ -40,9 +46,10 @@ async function searchSong(query) {
             if (p.spotify) msg += `🟢 [Spotify](${p.spotify.url})\n`;
             if (p.youtube) msg += `📺 [YouTube](${p.youtube.url})\n`;
             if (p.appleMusic) msg += `🍎 [Apple Music](${p.appleMusic.url})\n`;
+            if (p.soundcloud) msg += `☁️ [SoundCloud](${p.soundcloud.url})\n`;
             return msg;
         }
-        return "❌ No song links found.";
+        return "❌ No song links found. Try a specific name and artist!";
     } catch (err) { return "⚠️ Music API error."; }
 }
 
@@ -59,22 +66,26 @@ async function searchGithub(query) {
     } catch (err) { return "⚠️ GitHub API error."; }
 }
 
-// --- MAIN ROUTE ---
+// --- MAIN ROUTE (Foolproof) ---
 app.all('*', async (req, res) => {
-    if (req.method !== 'POST') return res.status(200).send("Chillax API is Live!");
+    if (req.method !== 'POST') return res.status(200).send("Chillax Multi-Tool: Online");
 
     const { type, prompt, query } = req.body;
     let finalOutput = "";
 
-    if (type === 'song') finalOutput = await searchSong(query);
-    else if (type === 'search') finalOutput = await searchGithub(query);
-    else finalOutput = await getAIResponse(prompt || "Yo!");
+    if (type === 'song') {
+        finalOutput = await searchSong(query);
+    } else if (type === 'search') {
+        finalOutput = await searchGithub(query);
+    } else {
+        finalOutput = await getAIResponse(prompt || "Yo!");
+    }
 
-    // Double-key return to fix [object Object]
+    // Returning data in multiple formats for BotGhost
     res.json({ 
         text: finalOutput,
         response: { text: finalOutput } 
     });
 });
 
-app.listen(PORT, () => console.log(`🚀 Chillax Server running on ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Chillax Server Ready on Port ${PORT}`));
