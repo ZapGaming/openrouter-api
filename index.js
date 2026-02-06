@@ -1,105 +1,83 @@
 const express = require('express');
 const fetch = require('node-fetch');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const FormData = require('form-data');
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-// --- API LOGIC ---
+// FALLBACK SOURCE
+const DEFAULT_CSS_URL = "https://raw.githubusercontent.com/warrayquipsome/Chillax/refs/heads/main/chillax.theme.css";
+
+// --- HELPERS ---
 
 async function searchSong(q) {
-    const res = await fetch(`https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(q)}&userCountry=US`);
-    const d = await res.json();
-    if (!d.linksByPlatform) return { text: "❌ No song found." };
-    const meta = d.entitiesByUniqueId[Object.keys(d.entitiesByUniqueId)[0]];
-    const p = d.linksByPlatform;
-    const providers = [
-        { n: "Spotify", e: "🟢", u: p.spotify?.url },
-        { n: "Apple Music", e: "🍎", u: p.appleMusic?.url },
-        { n: "YouTube", e: "📺", u: p.youtube?.url },
-        { n: "YT Music", e: "🔴", u: p.youtubeMusic?.url },
-        { n: "SoundCloud", e: "☁️", u: p.soundcloud?.url },
-        { n: "Tidal", e: "⚫", u: p.tidal?.url }
-    ].filter(x => x.u).map(x => `${x.e} [${x.n}](${x.u})`).join(" | ");
-    return { text: `🎵 **${meta.title}**\n${providers}`, thumb: meta.thumbnailUrl };
+    try {
+        const res = await fetch(`https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(q)}&userCountry=US`);
+        const d = await res.json();
+        if (!d.linksByPlatform) return { text: "❌ No song found." };
+        const meta = d.entitiesByUniqueId[Object.keys(d.entitiesByUniqueId)[0]];
+        const p = d.linksByPlatform;
+        const links = [
+            { n: "Spotify", e: "🟢", u: p.spotify?.url },
+            { n: "Apple Music", e: "🍎", u: p.appleMusic?.url },
+            { n: "YouTube", e: "📺", u: p.youtube?.url },
+            { n: "Tidal", e: "⚫", u: p.tidal?.url }
+        ].filter(x => x.u).map(x => `${x.e} [${x.n}](${x.u})`).join(" | ");
+        return { text: `🎵 **${meta.title}**\n${links}`, thumb: meta.thumbnailUrl };
+    } catch (e) { return { text: "⚠️ Song API error." }; }
 }
 
 async function searchGithub(q) {
-    const res = await fetch(`https://api.github.com/search/repositories?q=${encodeURIComponent(q)}&per_page=1`);
-    const d = await res.json();
-    if (!d.items?.[0]) return { text: "❌ Repo not found." };
-    const r = d.items[0];
-    const stats = `⭐ ${r.stargazers_count} | ❗ Issues: ${r.open_issues_count}\n🏷️ Topics: ${r.topics.slice(0, 3).join(", ") || "None"}`;
-    return { text: `📂 **[${r.full_name}](${r.html_url})**\n${stats}`, thumb: r.owner.avatar_url };
+    try {
+        const res = await fetch(`https://api.github.com/search/repositories?q=${encodeURIComponent(q)}&per_page=1`);
+        const d = await res.json();
+        if (!d.items?.[0]) return { text: "❌ Repo not found." };
+        const r = d.items[0];
+        const stats = `⭐ **${r.stargazers_count}** | 🍴 **${r.forks_count}** | ❗ **${r.open_issues_count}**\n📅 **Last Update:** ${new Date(r.pushed_at).toLocaleDateString()}`;
+        return { text: `📂 **[${r.full_name}](${r.html_url})**\n${stats}\n\n*${r.description || "No description."}*`, thumb: r.owner.avatar_url };
+    } catch (e) { return { text: "⚠️ GitHub API error." }; }
 }
-
-// ... (Keep the top part of your file the same)
 
 async function editTheme(fileUrl, vibe) {
-    // 1. Validation check - crucial for the "Absolute URL" error
-    if (!WEBHOOK_URL || !WEBHOOK_URL.startsWith('http')) {
-        console.error("❌ ERROR: DISCORD_WEBHOOK_URL is missing or invalid in Render Environment Variables.");
-        return { success: false, error: "Configuration Error" };
+    try {
+        // Fallback logic: Use provided URL or the default GitHub Chillax link
+        const cssSource = (fileUrl && fileUrl.startsWith('http')) ? fileUrl : DEFAULT_CSS_URL;
+        const cssRes = await fetch(cssSource);
+        const originalCSS = await cssRes.text();
+
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const prompt = `You are a CSS expert. Modify the :root variables in this CSS to match: "${vibe}".
+        Return ONLY a JSON object with two keys: "code" (the full css) and "changes" (a short summary). 
+        No markdown blocks.`;
+
+        const result = await model.generateContent([prompt, originalCSS]);
+        const data = JSON.parse(result.response.text().replace(/```json|```/g, ""));
+
+        // Format for Discord (Handling character limits)
+        let displayCode = data.code.length > 1500 ? data.code.substring(0, 1500) + "\n/* ... code truncated ... */" : data.code;
+
+        return { 
+            text: `✨ **Theme Edited Successfully!**\n\n**Summary of Changes:**\n${data.changes}\n\n**Updated Code Block:**\n\`\`\`css\n${displayCode}\n\`\`\``
+        };
+    } catch (e) {
+        console.error(e);
+        return { text: "❌ **Error:** Failed to process the theme. Check your file or prompt." };
     }
-
-    // We run the AI in a non-blocking way
-    (async () => {
-        try {
-            console.log("🎨 AI starting theme edit for vibe:", vibe);
-            const cssRes = await fetch(fileUrl);
-            const css = await cssRes.text();
-
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-            const prompt = `Return JSON ONLY: {"code": "full css", "changes": "brief list"}. Edit :root variables for: ${vibe}`;
-            
-            const result = await model.generateContent([prompt, css]);
-            const responseText = result.response.text().replace(/```json|```/g, "").trim();
-            const data = JSON.parse(responseText);
-
-            const form = new FormData();
-            form.append('file', Buffer.from(data.code), { filename: 'edited.theme.css', contentType: 'text/css' });
-            form.append('payload_json', JSON.stringify({ 
-                content: `✅ **Theme Ready!**\n\n**Changes Made:**\n${data.changes}` 
-            }));
-            
-            const discordRes = await fetch(WEBHOOK_URL, { 
-                method: 'POST', 
-                body: form, 
-                headers: form.getHeaders() 
-            });
-
-            if (!discordRes.ok) {
-                console.error("❌ Discord Webhook failed:", await discordRes.text());
-            } else {
-                console.log("🚀 Theme sent to Discord successfully.");
-            }
-        } catch (e) { 
-            console.error("🚨 AI Background Error:", e.message); 
-        }
-    })();
-
-    return { text: "⏳ **Processing... Your theme will be ready and sent to this channel shortly!**" };
 }
 
-// --- UPDATED ROUTER ---
+// --- MAIN ROUTE ---
+
 app.post('/', async (req, res) => {
     const { type, query, fileUrl, prompt } = req.body;
-    
-    // Log the request type for easier debugging in Render
-    console.log(`📩 Received Request Type: ${type}`);
+    let responseData = { text: "Invalid Request Type" };
 
-    if (type === 'song') return res.json(await searchSong(query));
-    if (type === 'repo') return res.json(await searchGithub(query));
-    if (type === 'edit') {
-        const response = await editTheme(fileUrl, prompt);
-        return res.json(response);
-    }
-    
-    res.json({ text: "Unknown request type received." });
+    if (type === 'song') responseData = await searchSong(query);
+    else if (type === 'repo') responseData = await searchGithub(query);
+    else if (type === 'edit') responseData = await editTheme(fileUrl, prompt);
+
+    res.json(responseData);
 });
 
-app.listen(PORT, () => console.log(`Zandybot Heartbeat: Online on Port ${PORT}`));
+app.listen(PORT, () => console.log(`Zandybot is live on ${PORT}`));
