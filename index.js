@@ -3,39 +3,45 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const HF_TOKEN = process.env.HF_TOKEN;
+const OMDB_API_KEY = process.env.OMDB_API_KEY;
 
-// --- AI LOGIC (Hugging Face) ---
-async function getAIResponse(prompt) {
+// --- GITHUB REPO SEARCH ---
+async function searchGithub(query) {
     try {
-        const response = await fetch(
-            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3",
-            {
-                headers: { 
-                    Authorization: `Bearer ${HF_TOKEN}`,
-                    "Content-Type": "application/json"
-                },
-                method: "POST",
-                body: JSON.stringify({
-                    inputs: `<s>[INST] You are the Chillax Support AI. Be chill, brief, use emojis, and help with Discord CSS. Answer this: ${prompt} [/INST]`,
-                    parameters: { max_new_tokens: 250, temperature: 0.7 }
-                }),
-            }
-        );
+        const res = await fetch(`https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&per_page=1`);
+        const data = await res.json();
         
-        const result = await response.json();
-        // Hugging Face returns an array: [{ generated_text: "..." }]
-        let aiText = result[0]?.generated_text || "";
-        
-        // Clean up the prompt from the response if it's included
-        return aiText.split('[/INST]').pop().trim() || "🌊 (HuggingFace is thinking...)";
+        if (data.items && data.items.length > 0) {
+            const repo = data.items[0];
+            return `📂 **Repo:** [${repo.full_name}](${repo.html_url})\n` +
+                   `⭐ Stars: ${repo.stargazers_count} | 🍴 Forks: ${repo.forks_count}\n` +
+                   `📝 ${repo.description || "No description provided."}`;
+        }
+        return `❌ Zandybot couldn't find a repo for "${query}".`;
     } catch (err) {
-        console.error(err);
-        return "⚠️ AI error. Make sure HF_TOKEN is correct on Render.";
+        return "⚠️ GitHub API is acting up.";
     }
 }
 
-// --- SONG SEARCH LOGIC ---
+// --- MOVIE/SHOW SEARCH (OMDb) ---
+async function searchOMDb(query) {
+    try {
+        const url = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&t=${encodeURIComponent(query)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (data.Response === "True") {
+            return `**${data.Type.toUpperCase()}: ${data.Title}** (${data.Year})\n` +
+                   `⭐ IMDb: ${data.imdbRating} | 🎭 ${data.Genre}\n` +
+                   `📝 ${data.Plot}`;
+        }
+        return `❌ Zandybot couldn't find that movie/show.`;
+    } catch (err) {
+        return "⚠️ OMDb API error.";
+    }
+}
+
+// --- SONG SEARCH (Songlink) ---
 async function searchSong(query) {
     try {
         const res = await fetch(`https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(query)}&userCountry=US`);
@@ -46,46 +52,26 @@ async function searchSong(query) {
             if (p.spotify) msg += `🟢 [Spotify](${p.spotify.url})\n`;
             if (p.youtube) msg += `📺 [YouTube](${p.youtube.url})\n`;
             if (p.appleMusic) msg += `🍎 [Apple Music](${p.appleMusic.url})\n`;
-            if (p.soundcloud) msg += `☁️ [SoundCloud](${p.soundcloud.url})\n`;
             return msg;
         }
-        return "❌ No song links found. Try a specific name and artist!";
+        return "❌ Zandybot couldn't find those song links.";
     } catch (err) { return "⚠️ Music API error."; }
 }
 
-// --- GITHUB REPO LOGIC ---
-async function searchGithub(query) {
-    try {
-        const res = await fetch(`https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&per_page=1`);
-        const data = await res.json();
-        if (data.items?.[0]) {
-            const repo = data.items[0];
-            return `📂 **Repo:** [${repo.full_name}](${repo.html_url})\n⭐ Stars: ${repo.stargazers_count}\n📝 ${repo.description || "No description."}`;
-        }
-        return "❌ No repo found.";
-    } catch (err) { return "⚠️ GitHub API error."; }
-}
-
-// --- MAIN ROUTE (Foolproof) ---
+// --- MAIN ROUTE ---
 app.all('*', async (req, res) => {
-    if (req.method !== 'POST') return res.status(200).send("Chillax Multi-Tool: Online");
+    if (req.method !== 'POST') return res.status(200).send("Zandybot is Online!");
 
-    const { type, prompt, query } = req.body;
+    const { type, query } = req.body;
     let finalOutput = "";
 
-    if (type === 'song') {
-        finalOutput = await searchSong(query);
-    } else if (type === 'search') {
-        finalOutput = await searchGithub(query);
-    } else {
-        finalOutput = await getAIResponse(prompt || "Yo!");
-    }
+    // Routing based on command type
+    if (type === 'github') finalOutput = await searchGithub(query);
+    else if (type === 'watch') finalOutput = await searchOMDb(query);
+    else if (type === 'song') finalOutput = await searchSong(query);
+    else finalOutput = "Zandybot: Online. Use /repo, /watch, or /song!";
 
-    // Returning data in multiple formats for BotGhost
-    res.json({ 
-        text: finalOutput,
-        response: { text: finalOutput } 
-    });
+    res.json({ text: finalOutput });
 });
 
-app.listen(PORT, () => console.log(`🚀 Chillax Server Ready on Port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Zandybot Live on Port ${PORT}`));
