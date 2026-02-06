@@ -42,7 +42,7 @@ async function editTheme(fileUrl, vibe) {
     (async () => {
         try {
             const css = await (await fetch(fileUrl)).text();
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
             const prompt = `Return JSON ONLY: {"code": "full css", "changes": "brief list"}. Edit :root for: ${vibe}`;
             const result = await model.generateContent([prompt, css]);
             const data = JSON.parse(result.response.text().replace(/```json|```/g, ""));
