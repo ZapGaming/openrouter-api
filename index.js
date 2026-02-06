@@ -1,7 +1,5 @@
 const express = require('express');
 const app = express();
-
-// Required to read BotGhost's JSON
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
@@ -16,8 +14,8 @@ async function searchGithub(query) {
             const repo = data.items[0];
             return `📂 **Repo:** [${repo.full_name}](${repo.html_url})\n⭐ Stars: ${repo.stargazers_count}\n📝 ${repo.description || "No description."}`;
         }
-        return `❌ No repo found for "${query}"`;
-    } catch (err) { return "⚠️ GitHub Error."; }
+        return `❌ Zandybot couldn't find "${query}" on GitHub.`;
+    } catch (err) { return "⚠️ GitHub API error."; }
 }
 
 // --- MOVIE/SHOW SEARCH (OMDb) ---
@@ -26,46 +24,63 @@ async function searchOMDb(query) {
         const res = await fetch(`http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&t=${encodeURIComponent(query)}`);
         const data = await res.json();
         if (data.Response === "True") {
-            return `**${data.Type.toUpperCase()}: ${data.Title}** (${data.Year})\n⭐ IMDb: ${data.imdbRating}\n📝 ${data.Plot}`;
+            return `**${data.Type.toUpperCase()}: ${data.Title}** (${data.Year})\n⭐ IMDb: ${data.imdbRating} | 🎭 ${data.Genre}\n📝 ${data.Plot}`;
         }
-        return `❌ Movie/Show "${query}" not found.`;
-    } catch (err) { return "⚠️ OMDb Error."; }
+        return `❌ Zandybot couldn't find the movie "${query}".`;
+    } catch (err) { return "⚠️ OMDb API error."; }
 }
 
-// --- SONG SEARCH ---
+// --- DEEP SONG SEARCH (Songlink/Odesli) ---
 async function searchSong(query) {
     try {
+        // We use the search endpoint for broader platform coverage
         const res = await fetch(`https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(query)}&userCountry=US`);
         const data = await res.json();
+        
         if (data.linksByPlatform) {
             const p = data.linksByPlatform;
-            let msg = `🎵 **Links for: ${query}**\n`;
+            let msg = `🎵 **Zandybot found your track on these platforms:**\n`;
+            
+            // Adding more results as requested
             if (p.spotify) msg += `🟢 [Spotify](${p.spotify.url})\n`;
+            if (p.youtubeMusic) msg += `🔴 [YouTube Music](${p.youtubeMusic.url})\n`;
+            if (p.appleMusic) msg += `🍎 [Apple Music](${p.appleMusic.url})\n`;
             if (p.youtube) msg += `📺 [YouTube](${p.youtube.url})\n`;
+            if (p.deezer) msg += `🟣 [Deezer](${p.deezer.url})\n`;
+            if (p.tidal) msg += `⚫ [Tidal](${p.tidal.url})\n`;
+            if (p.soundcloud) msg += `☁️ [SoundCloud](${p.soundcloud.url})\n`;
+            
             return msg;
         }
-        return "❌ Song not found.";
-    } catch (err) { return "⚠️ Music Error."; }
+        return "❌ Zandybot couldn't find links for that song.";
+    } catch (err) { return "⚠️ Music API error."; }
 }
 
 // --- MAIN ROUTE ---
 app.post('/', async (req, res) => {
-    // DEBUG: This prints in your Render Logs
-    console.log("Incoming Data:", req.body);
+    console.log("Incoming Data:", req.body); // Check your Render logs!
 
     const { type, query } = req.body;
-    let result = "";
+    let finalOutput = "";
 
-    // Check type and query
-    if (type === 'github') result = await searchGithub(query);
-    else if (type === 'watch') result = await searchOMDb(query);
-    else if (type === 'song') result = await searchSong(query);
-    else result = "❌ Error: Zandybot received an unknown command type.";
+    // Added 'search' to match the log you provided
+    if (type === 'github' || type === 'search') {
+        finalOutput = await searchGithub(query);
+    } 
+    else if (type === 'watch') {
+        finalOutput = await searchOMDb(query);
+    } 
+    else if (type === 'song') {
+        finalOutput = await searchSong(query);
+    } 
+    else {
+        finalOutput = "❌ Zandybot: Unknown command type. Use /repo, /watch, or /song!";
+    }
 
-    res.json({ text: result });
+    res.json({ text: finalOutput });
 });
 
-// Keep-alive route for browser
-app.get('/', (req, res) => res.send("Zandybot is Online!"));
+// Browser keep-alive
+app.get('/', (req, res) => res.send("Zandybot is Online and Awake!"));
 
 app.listen(PORT, () => console.log(`🚀 Zandybot Live on ${PORT}`));
