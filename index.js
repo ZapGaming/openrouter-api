@@ -5,66 +5,79 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-// --- Logic: Song Search (Odesli) ---
+// --- SONG SEARCH LOGIC ---
 async function searchSong(query) {
     try {
-        // Use Odesli's public API to find music links
         const res = await fetch(`https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(query)}&userCountry=US`);
         const data = await res.json();
         
         if (data.linksByPlatform) {
             const p = data.linksByPlatform;
-            let responseText = `🎵 **Results for your search:**\n`;
-            if (p.spotify) responseText += `🟢 [Spotify](${p.spotify.url})\n`;
-            if (p.appleMusic) responseText += `🍎 [Apple Music](${p.appleMusic.url})\n`;
-            if (p.youtube) responseText += `📺 [YouTube](${p.youtube.url})\n`;
-            if (p.soundcloud) responseText += `☁️ [SoundCloud](${p.soundcloud.url})\n`;
-            return responseText;
+            let links = `🎵 **Links for: ${query}**\n`;
+            if (p.spotify) links += `🟢 [Spotify](${p.spotify.url})\n`;
+            if (p.appleMusic) links += `🍎 [Apple Music](${p.appleMusic.url})\n`;
+            if (p.youtube) links += `📺 [YouTube](${p.youtube.url})\n`;
+            if (p.soundcloud) links += `☁️ [SoundCloud](${p.soundcloud.url})\n`;
+            return links;
         }
-        
-        // If not a link, Odesli works better with a platform-specific search link first, 
-        // but for a foolproof version, we'll tell them to provide a name or link.
-        return "❌ Could not find that song. Try pasting a Spotify or YouTube link for a full list of platforms!";
+        return "❌ Couldn't find links for that song name/URL.";
     } catch (err) {
-        return "⚠️ Music Search is currently wavy. Try again later.";
+        return "⚠️ Music API error. Try a different song name!";
     }
 }
 
-// --- Logic: GitHub & AI (Updated) ---
-async function getAIResponse(prompt, user) {
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { "Authorization": `Bearer ${OPENROUTER_API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-            model: "meta-llama/llama-3.1-8b-instruct:free",
-            messages: [{ role: "system", content: "You are the Chillax Support AI. Be chill." }, { role: "user", content: prompt }]
-        })
-    });
-    const data = await res.json();
-    return data.choices?.[0]?.message?.content || "🌊";
+// --- AI LOGIC (STABILIZED) ---
+async function getAIResponse(prompt) {
+    try {
+        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: { 
+                "Authorization": `Bearer ${OPENROUTER_API_KEY}`, 
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://render.com" 
+            },
+            body: JSON.stringify({
+                model: "meta-llama/llama-3.1-8b-instruct:free", // Use a standard stable model
+                messages: [
+                    { role: "system", content: "You are the Chillax Support AI. Help with Discord themes and CSS. Be brief and chill." },
+                    { role: "user", content: prompt }
+                ]
+            })
+        });
+        const data = await res.json();
+        
+        // Debug: if the AI is empty, this catches it before the emoji
+        const aiText = data.choices?.[0]?.message?.content;
+        if (!aiText || aiText.trim() === "") {
+            return "💨 The AI is a bit quiet right now. Try rephrasing your question!";
+        }
+        return aiText;
+    } catch (err) {
+        return "🔴 Server connection drop. Try again in 5 seconds.";
+    }
 }
 
-// --- The Main Route ---
+// --- MAIN ROUTE ---
 app.all('*', async (req, res) => {
-    if (req.method !== 'POST') return res.status(200).send("Online.");
+    if (req.method !== 'POST') return res.status(200).send("Chillax Server Active");
 
-    const { type, prompt, query, user } = req.body;
-    let result = "";
+    const { type, prompt, query } = req.body;
+    let finalMsg = "";
 
     if (type === 'song') {
-        result = await searchSong(query);
+        finalMsg = await searchSong(query);
     } else if (type === 'search') {
-        // ... (Insert GitHub logic from previous step here)
-        result = "Repo search logic active."; 
+        // ... (Keep your existing GitHub repo code here)
+        finalMsg = "GitHub repo found!"; 
     } else {
-        result = await getAIResponse(prompt, user);
+        finalMsg = await getAIResponse(prompt || "Hello");
     }
 
-    // This specific return structure fixes [object Object]
+    // This structure ensures BotGhost sees the text key directly
     res.json({ 
-        response: { text: result }, 
-        text: result 
+        text: finalMsg,
+        response: { text: finalMsg } 
     });
 });
 
-app.listen(PORT, () => console.log(`🚀 Multi-Tool Live on ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Chillax Multi-Tool on port ${PORT}`));
