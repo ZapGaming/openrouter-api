@@ -37,34 +37,69 @@ async function searchGithub(q) {
     return { text: `📂 **[${r.full_name}](${r.html_url})**\n${stats}`, thumb: r.owner.avatar_url };
 }
 
+// ... (Keep the top part of your file the same)
+
 async function editTheme(fileUrl, vibe) {
-    // We run the AI in a non-blocking way so the API returns a status immediately
+    // 1. Validation check - crucial for the "Absolute URL" error
+    if (!WEBHOOK_URL || !WEBHOOK_URL.startsWith('http')) {
+        console.error("❌ ERROR: DISCORD_WEBHOOK_URL is missing or invalid in Render Environment Variables.");
+        return { success: false, error: "Configuration Error" };
+    }
+
+    // We run the AI in a non-blocking way
     (async () => {
         try {
-            const css = await (await fetch(fileUrl)).text();
-            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-            const prompt = `Return JSON ONLY: {"code": "full css", "changes": "brief list"}. Edit :root for: ${vibe}`;
+            console.log("🎨 AI starting theme edit for vibe:", vibe);
+            const cssRes = await fetch(fileUrl);
+            const css = await cssRes.text();
+
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const prompt = `Return JSON ONLY: {"code": "full css", "changes": "brief list"}. Edit :root variables for: ${vibe}`;
+            
             const result = await model.generateContent([prompt, css]);
-            const data = JSON.parse(result.response.text().replace(/```json|```/g, ""));
+            const responseText = result.response.text().replace(/```json|```/g, "").trim();
+            const data = JSON.parse(responseText);
 
             const form = new FormData();
             form.append('file', Buffer.from(data.code), { filename: 'edited.theme.css', contentType: 'text/css' });
-            form.append('payload_json', JSON.stringify({ content: `✅ **Theme Ready!**\n\n**Changes Made:**\n${data.changes}` }));
+            form.append('payload_json', JSON.stringify({ 
+                content: `✅ **Theme Ready!**\n\n**Changes Made:**\n${data.changes}` 
+            }));
             
-            await fetch(WEBHOOK_URL, { method: 'POST', body: form, headers: form.getHeaders() });
-        } catch (e) { console.error("AI Background Error:", e); }
+            const discordRes = await fetch(WEBHOOK_URL, { 
+                method: 'POST', 
+                body: form, 
+                headers: form.getHeaders() 
+            });
+
+            if (!discordRes.ok) {
+                console.error("❌ Discord Webhook failed:", await discordRes.text());
+            } else {
+                console.log("🚀 Theme sent to Discord successfully.");
+            }
+        } catch (e) { 
+            console.error("🚨 AI Background Error:", e.message); 
+        }
     })();
-    return { text: "✅ Status: Working on it!" };
+
+    return { text: "⏳ **Processing... Your theme will be ready and sent to this channel shortly!**" };
 }
 
-// --- ROUTER ---
-
+// --- UPDATED ROUTER ---
 app.post('/', async (req, res) => {
     const { type, query, fileUrl, prompt } = req.body;
+    
+    // Log the request type for easier debugging in Render
+    console.log(`📩 Received Request Type: ${type}`);
+
     if (type === 'song') return res.json(await searchSong(query));
     if (type === 'repo') return res.json(await searchGithub(query));
-    if (type === 'edit') return res.json(await editTheme(fileUrl, prompt));
-    res.json({ text: "Unknown type" });
+    if (type === 'edit') {
+        const response = await editTheme(fileUrl, prompt);
+        return res.json(response);
+    }
+    
+    res.json({ text: "Unknown request type received." });
 });
 
-app.listen(PORT);
+app.listen(PORT, () => console.log(`Zandybot Heartbeat: Online on Port ${PORT}`));
