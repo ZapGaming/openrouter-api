@@ -11,5 +11,6 @@
    "canvas": "^2.11.2",
    "node-fetch": "^2.6.9",
    "@google/generative-ai": "^0.1.0"
+   "form-data": "^4.0.0"
  }
 }
