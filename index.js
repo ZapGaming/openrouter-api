@@ -47,7 +47,7 @@ async function editTheme(fileUrl, vibe) {
         const cssRes = await fetch(cssSource);
         const originalCSS = await cssRes.text();
 
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
         const prompt = `You are a CSS expert. Modify the :root variables in this CSS to match: "${vibe}".
         Return ONLY a JSON object with two keys: "code" (the full css) and "changes" (a short summary). 
         No markdown blocks.`;
