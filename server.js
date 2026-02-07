@@ -38,7 +38,7 @@ const getEmoji = (el) => elementProfiles[el.toLowerCase()] || "💎";
 
 // --- AI CORE HELPER ---
 async function askGemini(prompt) {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
     const result = await model.generateContent(prompt + ". Return ONLY raw JSON.");
     const text = result.response.text().replace(/```json|```/g, "").trim();
     return JSON.parse(text);
