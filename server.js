@@ -52,7 +52,7 @@ const User = mongoose.model('User', userSchema);
 
 // --- AI CORE: MONSTER ARCHITECT ---
 async function generateMonsterData(promptStr, isEnemy = false) {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
     
     // Strict prompt to force full stats and lore
     const fullPrompt = `${promptStr}. Return ONLY a JSON object: {
