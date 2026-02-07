@@ -1,21 +1,27 @@
 const express = require('express');
-const mongoose = require('mongoose');
+const fs = require('fs');
+const path = require('path');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 require('dotenv').config();
 
 const app = express();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const DB_PATH = path.join(__dirname, 'database.json');
 
 app.use(express.json());
 
-// --- DATABASE SCHEMA ---
-const userSchema = new mongoose.Schema({
-    discordId: { type: String, required: true, unique: true },
-    essence: { type: Number, default: 1000 },
-    lastClaimed: { type: Date, default: new Date(0) },
-    monsters: { type: Array, default: [] } // Simple array to prevent schema casting errors
-});
-const User = mongoose.model('User', userSchema);
+// --- LOCAL DB HELPERS ---
+// This replaces MongoDB. It reads/writes to a file on your Render server.
+function readDB() {
+    if (!fs.existsSync(DB_PATH)) {
+        fs.writeFileSync(DB_PATH, JSON.stringify({ users: {} }, null, 2));
+    }
+    return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+}
+
+function writeDB(data) {
+    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
+}
 
 const elementProfiles = {
     "inferno": "🔥", "abyssal": "🌑", "cyber": "📡", "void": "🌀", 
@@ -23,32 +29,20 @@ const elementProfiles = {
     "aura": "🌸", "spectre": "👻", "chrono": "⏳", "vortex": "🌪️"
 };
 
-// --- CORE AI & FORMATTER ---
+// --- AI CORE ---
 async function askGemini(prompt) {
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-    const strictPrompt = `${prompt}. 
-    RETURN ONLY RAW JSON. NO MARKDOWN. NO CODE BLOCKS.
-    FORMAT: {"name": "Name", "element": "Type", "elLore": "Lore", "atk": 40, "def": 20, "spd": 15, "hp": 200, "bio": "Bio"}`;
+    const strictPrompt = `${prompt}. RETURN ONLY RAW JSON. NO CODE BLOCKS.
+    FORMAT: {"name": "Name", "element": "Type", "elLore": "Lore", "atk": 40, "def": 20, "hp": 200, "bio": "Bio"}`;
     
     const result = await model.generateContent(strictPrompt);
-    let text = result.response.text().trim();
-    
-    // Clean any accidental markdown code blocks
-    text = text.replace(/```json|```/g, "").trim();
-    
+    let text = result.response.text().replace(/```json|```/g, "").trim();
     const data = JSON.parse(text);
     
-    // Force Formatting & Default Values
     return {
-        name: data.name || "Unknown Entity",
-        element: data.element || "Aura",
-        elLore: data.elLore || "Mysterious digital energy.",
+        ...data,
         atk: Number(data.atk) || 45,
-        def: Number(data.def) || 25,
-        spd: Number(data.spd) || 20,
         hp: Number(data.hp) || 250,
-        maxHp: Number(data.hp) || 250,
-        bio: data.bio || "Origin unknown.",
         level: 1,
         emoji: elementProfiles[String(data.element).toLowerCase()] || "💎"
     };
@@ -58,116 +52,87 @@ async function askGemini(prompt) {
 
 app.post('/spawn', async (req, res) => {
     const { id, description } = req.body;
-    console.log(`[SPAWN] Request for User: ${id}`);
+    const userId = String(id);
 
     try {
         const monster = await askGemini(`Create monster: ${description}`);
-        
-        // FIND OR CREATE USER
-        let user = await User.findOne({ discordId: String(id) });
-        if (!user) {
-            console.log(`[DB] Creating new user record for ${id}`);
-            user = new User({ discordId: String(id), monsters: [] });
+        const db = readDB();
+
+        if (!db.users[userId]) {
+            db.users[userId] = { essence: 1000, monsters: [], lastClaimed: 0 };
         }
 
-        // FORCE PUSH AND SAVE
-        user.monsters.push(monster);
-        user.markModified('monsters'); // CRITICAL: Tells Mongoose the array changed
-        
-        await user.save();
-        console.log(`[DB] Monster "${monster.name}" saved to User ${id}. Total now: ${user.monsters.length}`);
+        db.users[userId].monsters.push(monster);
+        writeDB(db);
 
         res.json({
-            text: `${monster.emoji} **${monster.name}** has crossed the rift!\n\n**Type:** ${monster.element}\n**Lore:** ${monster.elLore}\n**Stats:** ❤️ ${monster.hp} | ⚔️ ${monster.atk} | 🛡️ ${monster.def} | ⚡ ${monster.spd}\n\n*${monster.bio}*`
+            text: `${monster.emoji} **${monster.name}** has crossed the rift!\n\n**Type:** ${monster.element}\n**Lore:** ${monster.elLore}\n**Stats:** ❤️ ${monster.hp} | ⚔️ ${monster.atk}\n\n*${monster.bio}*`
         });
-    } catch (e) { 
-        console.error(`[ERROR] Spawn failed:`, e.message);
-        res.json({ text: "⚠️ The digital rift collapsed. Please try again." }); 
-    }
-});
-
-app.post('/collection', async (req, res) => {
-    const { id } = req.body;
-    console.log(`[COLLECTION] Fetching for User: ${id}`);
-
-    try {
-        const user = await User.findOne({ discordId: String(id) });
-
-        if (!user || !user.monsters || user.monsters.length === 0) {
-            return res.json({ text: "📭 Your collection is empty. Run `/spawn` to begin your journey." });
-        }
-
-        let list = `📂 **Digital Bestiary [Total: ${user.monsters.length}]**\n💰 Essence: ${user.essence}\n\n`;
-        user.monsters.forEach((m, i) => {
-            list += `**[${i + 1}]** ${m.emoji || '💎'} **${m.name}** (Lv.${m.level || 1})\n   *${m.element} | ⚔️ ${m.atk} | 🛡️ ${m.def} | ❤️ ${m.hp} HP*\n\n`;
-        });
-
-        res.json({ text: list });
     } catch (e) {
-        console.error(`[ERROR] Collection fetch failed:`, e.message);
-        res.json({ text: "⚠️ Error accessing the bestiary." });
+        res.json({ text: "⚠️ Rift error. Try again." });
     }
 });
 
-app.post('/claim', async (req, res) => {
+app.post('/collection', (req, res) => {
     const { id } = req.body;
-    try {
-        let user = await User.findOne({ discordId: String(id) });
-        if (!user) user = new User({ discordId: String(id) });
+    const db = readDB();
+    const user = db.users[String(id)];
 
-        const now = new Date();
-        const hours24 = 24 * 60 * 60 * 1000;
-        
-        if (now - user.lastClaimed < hours24) {
-            const remaining = Math.ceil((hours24 - (now - user.lastClaimed)) / (60 * 60 * 1000));
-            return res.json({ text: `⏳ Your core is still recharging. Return in **${remaining} hours**.` });
-        }
-
-        user.essence += 500;
-        user.lastClaimed = now;
-        await user.save();
-        res.json({ text: `✨ **Essence Infused!**\n+500 Essence added. Total: 💰 **${user.essence}**` });
-    } catch (e) {
-        res.json({ text: "⚠️ Claim failed." });
+    if (!user || user.monsters.length === 0) {
+        return res.json({ text: "📭 Your collection is empty. Use `/spawn`." });
     }
+
+    let list = `📂 **Digital Bestiary [Total: ${user.monsters.length}]**\n💰 Essence: ${user.essence}\n\n`;
+    user.monsters.forEach((m, i) => {
+        list += `**[${i + 1}]** ${m.emoji} **${m.name}** (Lv.${m.level})\n   *${m.element} | ⚔️ ${m.atk} | ❤️ ${m.hp} HP*\n\n`;
+    });
+
+    res.json({ text: list });
 });
 
-// BATTLE LOGIC
+app.post('/claim', (req, res) => {
+    const { id } = req.body;
+    const db = readDB();
+    const userId = String(id);
+
+    if (!db.users[userId]) db.users[userId] = { essence: 1000, monsters: [], lastClaimed: 0 };
+
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+
+    if (now - db.users[userId].lastClaimed < day) {
+        return res.json({ text: "⏳ Core recharging. Try again later." });
+    }
+
+    db.users[userId].essence += 500;
+    db.users[userId].lastClaimed = now;
+    writeDB(db);
+
+    res.json({ text: `✨ **Essence Infused!**\n+500 added. Total: 💰 **${db.users[userId].essence}**` });
+});
+
 app.post('/battle', async (req, res) => {
     const { id, monsterIndex } = req.body;
-    try {
-        const user = await User.findOne({ discordId: String(id) });
-        const idx = parseInt(monsterIndex) - 1;
+    const db = readDB();
+    const user = db.users[String(id)];
+    const idx = parseInt(monsterIndex) - 1;
 
-        if (!user || !user.monsters[idx]) {
-            return res.json({ text: "❌ Invalid selection. Use `/collection` to see your monsters." });
-        }
+    if (!user || !user.monsters[idx]) return res.json({ text: "❌ Invalid monster." });
 
-        const pMon = user.monsters[idx];
-        const enemy = await askGemini(`Enemy for ${pMon.name}`);
-        
-        let log = `⚔️ **ARENA DUEL: ${pMon.name.toUpperCase()} VS ${enemy.name.toUpperCase()}**\n\n`;
-        
-        const pDmg = Math.max(20, pMon.atk - (enemy.def * 0.2));
-        const eDmg = Math.max(20, enemy.atk - (pMon.def * 0.2));
+    const pMon = user.monsters[idx];
+    const enemy = await askGemini(`Rival for ${pMon.name}`);
 
-        if (pDmg >= eDmg) {
-            user.essence += 250;
-            log += `> ${pMon.name} dominated with ${Math.floor(pDmg)} damage!\n🏆 **Victory!** +250 Essence.`;
-        } else {
-            log += `> ${enemy.name} was too fast!\n💀 **Defeat.** Your monster retreated.`;
-        }
-
-        await user.save();
-        res.json({ text: log });
-    } catch (e) {
-        res.json({ text: "⚠️ Arena is currently closed." });
+    let log = `⚔️ **ARENA: ${pMon.name} vs ${enemy.name}**\n\n`;
+    if (pMon.atk >= (enemy.atk * 0.8)) {
+        user.essence += 250;
+        log += `🏆 **Victory!** +250 Essence.`;
+    } else {
+        log += `💀 **Defeat.**`;
     }
+
+    writeDB(db);
+    res.json({ text: log });
 });
 
 const PORT = process.env.PORT || 3000;
-mongoose.connect(process.env.MONGO_URI)
-    .then(() => {
-        console.log("🌌 DATABASE CONNECTED");
-        app.listen(PORT, () => console.log(`🚀 ENGINE LIVE ON PORT ${PORT}`));
-    });
+app.listen(PORT, () => console.log(`🚀 LOCAL STORAGE ENGINE LIVE ON ${PORT}`));
