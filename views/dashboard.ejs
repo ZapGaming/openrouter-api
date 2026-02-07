@@ -1,39 +1,18 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <style>
-        body { background: #1e1e2e; color: #cdd6f4; font-family: sans-serif; text-align: center; }
-        .card { background: #313244; border-radius: 15px; padding: 20px; margin: 10px; display: inline-block; width: 250px; border: 1px solid #fab387; }
-        button { background: #fab387; color: #11111b; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
+        body { background: #11111b; color: #cdd6f4; font-family: monospace; }
+        #boss-arena { border: 2px solid #fab387; width: 800px; height: 400px; margin: auto; }
     </style>
 </head>
 <body>
-    <h1>zandymon world</h1>
-    <p>essence: <span id="balance"><%= user.essence %></span></p>
-    <button onclick="claim()">claim daily 200 essence</button>
-
-    <div id="monsters">
-        <% user.monsters.forEach(m => { %>
-            <div class="card">
-                <h3><%= m.name %></h3>
-                <p>lvl <%= m.level %> | <%= m.element %></p>
-                <button>fight ai</button>
-                <button>evolve</button>
-            </div>
-        <% }) %>
-    </div>
-
+    <h1>zandymon digital world</h1>
+    <div id="boss-arena"></div>
     <script>
-        async function claim() {
-            const res = await fetch('/claim-daily', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ id: '<%= user.discordId %>' })
-            });
-            const data = await res.json();
-            if (data.success) document.getElementById('balance').innerText = data.newTotal;
-            else alert(data.msg);
-        }
+        // phaser logic for world boss animations goes here
+        console.log("world boss arena initialized");
     </script>
 </body>
 </html>
