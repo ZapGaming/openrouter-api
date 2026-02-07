@@ -58,7 +58,7 @@ let worldBoss = {
 
 // --- AI ENGINE (STRICT STAT ENFORCEMENT) ---
 async function generateAI(prompt) {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const cleaned = response.text().replace(/```json|```/g, "").trim();
