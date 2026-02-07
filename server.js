@@ -7,196 +7,197 @@ require('dotenv').config();
 
 const app = express();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// Memory storage for 2-hour secure dashboard tokens
 const activeTokens = new Map();
 
-// --- CONFIGURATION ---
+// --- CONFIG & MIDDLEWARE ---
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// --- EMOJI & ELEMENT LOGIC ---
-const elementEmojis = {
-    "fire": "🔥", "water": "💧", "earth": "🌿", "lightning": "⚡",
-    "magic": "🔮", "soul": "👻", "legend": "👑", "void": "🌑",
-    "ice": "❄️", "light": "✨", "dark": "🕶️", "metal": "⚙️", "nature": "🍃"
+// --- ADVANCED ELEMENT & EMOJI SYSTEM ---
+const elementProfiles = {
+    "inferno": "🔥", "abyssal": "🌑", "cyber": "📡", "void": "🌀", 
+    "celestial": "✨", "bio-hazard": "☣️", "plasma": "⚡", "glitch": "👾",
+    "spectre": "👻", "chrono": "⏳", "nebula": "🌌", "titan": "🏔️"
 };
 
 const getEmoji = (el) => {
-    if (!el) return "🌀";
-    const found = elementEmojis[el.toLowerCase()];
-    return found || "🌀"; // 🌀 is the fallback for unique/custom AI elements
+    if (!el) return "💠";
+    return elementProfiles[el.toLowerCase()] || "💎"; 
 };
 
-// --- DATABASE SCHEMA ---
+// --- DATABASE ARCHITECTURE ---
 const userSchema = new mongoose.Schema({
     discordId: String,
-    essence: { type: Number, default: 500 },
-    rank: { type: String, default: "novice" },
+    essence: { type: Number, default: 1000 },
+    rank: { type: String, default: "Unranked" },
+    history: { wins: { type: Number, default: 0 }, losses: { type: Number, default: 0 } },
     monsters: [{
         name: String,
         element: String,
+        elLore: String, // Deep description of the custom element
         emoji: String,
         rarity: String,
         level: { type: Number, default: 1 },
-        atk: { type: Number, default: 10 },
-        hp: { type: Number, default: 100 },
+        atk: Number,
+        def: Number,
+        spd: Number,
+        hp: Number,
+        maxHp: Number,
         bio: String
     }]
 });
 const User = mongoose.model('User', userSchema);
 
-// --- WORLD BOSS STATE ---
-let worldBoss = {
-    name: "The Monolith of Void",
-    hp: 100000,
-    maxHp: 100000,
-    element: "Entropy"
-};
+// --- AI CORE: MONSTER ARCHITECT ---
+async function generateMonsterData(promptStr, isEnemy = false) {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    
+    // Strict prompt to force full stats and lore
+    const fullPrompt = `${promptStr}. Return ONLY a JSON object: {
+        "name": "Unique Name",
+        "element": "Custom Element Type",
+        "elLore": "Detailed description of the element's power",
+        "rarity": "Legendary/Elite/Common",
+        "atk": 50, "def": 30, "spd": 25, "hp": 250,
+        "bio": "Deep lore history"
+    }`;
 
-// --- AI ENGINE (STRICT STAT ENFORCEMENT) ---
-async function generateAI(prompt) {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-    const result = await model.generateContent(prompt);
+    const result = await model.generateContent(fullPrompt);
     const response = await result.response;
     const cleaned = response.text().replace(/```json|```/g, "").trim();
-    
-    let data = JSON.parse(cleaned);
-    
-    // Safety check: Force stats if AI forgets them
-    if (!data.atk || isNaN(data.atk)) data.atk = Math.floor(Math.random() * 20) + 15;
-    if (!data.hp || isNaN(data.hp)) data.hp = Math.floor(Math.random() * 50) + 100;
-    
+    const data = JSON.parse(cleaned);
+
+    // Finalize stats and assign visual icons
+    data.maxHp = data.hp || 200;
+    data.emoji = getEmoji(data.element);
     return data;
 }
 
-// --- ROUTES: DISCORD PORTAL ---
+// --- DISCORD PORTAL ROUTES ---
 
-// 1. Generate Link for BotGhost /dashboard
+// Endpoint for /dashboard - Secure Token Generation
 app.post('/generate-link', (req, res) => {
     const { id } = req.body;
-    if (!id) return res.json({ text: "Error: No User ID provided." });
+    if (!id) return res.json({ text: "Identification failed. Link aborted." });
 
-    const token = crypto.randomBytes(16).toString('hex');
-    activeTokens.set(token, { discordId: id, expires: Date.now() + 7200000 });
-    
-    res.json({ text: `🔗 **Portal Open (2h):** https://${req.get('host')}/dash/${token}` });
+    const token = crypto.randomBytes(32).toString('hex');
+    activeTokens.set(token, { discordId: id, expires: Date.now() + 7200000 }); // 2-hour window
+
+    res.json({ text: `🌐 **Portal Decrypted.** Access granted for 2h:\nhttps://${req.get('host')}/dash/${token}` });
 });
 
-// 2. Spawn Monster for BotGhost /spawn
+// Endpoint for /spawn - Initial Creation
 app.post('/monster', async (req, res) => {
     const { description, rank, id } = req.body;
     try {
-        const prompt = `Create a monster RPG profile. Description: ${description}. Rank: ${rank}. 
-        Return JSON ONLY: {"name": "Name", "element": "Type", "rarity": "Common/Rare", "atk": 25, "hp": 150, "bio": "Lore"}`;
+        const monster = await generateMonsterData(`Create a powerful creature based on: ${description}. Rank: ${rank}`);
         
-        const data = await generateAI(prompt);
-        let user = await User.findOne({ discordId: id }) || new User({ discordId: id });
-        
-        const finalMonster = {
-            ...data,
-            emoji: getEmoji(data.element)
-        };
-        
-        user.monsters.push(finalMonster);
+        let user = await User.findOne({ discordId: id });
+        if (!user) user = new User({ discordId: id });
+
+        user.monsters.push(monster);
         await user.save();
 
-        res.json({ text: `${finalMonster.emoji} **${data.name}** materialized with **${data.hp} HP**!` });
+        res.json({ 
+            text: `${monster.emoji} **${monster.name}** [${monster.element}]\n**Lore:** ${monster.elLore}\n**Stats:** ❤️ ${monster.hp} | ⚔️ ${monster.atk} | 🛡️ ${monster.def}` 
+        });
     } catch (err) {
-        console.error(err);
-        res.json({ text: "⚠️ Rift error. AI failed to spawn creature." });
+        res.json({ text: "⚠️ The digital rift is unstable. Creation failed." });
     }
 });
 
-// --- ROUTES: WEBSITE DASHBOARD ---
+// --- WEBSITE GAME ROUTES ---
 
-// 3. Main Site View
+// Main Dashboard: Load World & Monsters
 app.get('/dash/:token', async (req, res) => {
     try {
         const session = activeTokens.get(req.params.token);
         if (!session || Date.now() > session.expires) {
-            return res.status(403).send("<h1>Session Expired</h1><p>Generate a new link in Discord.</p>");
+            return res.status(403).send("<h1>Session Terminated</h1><p>Generate a new portal in Discord.</p>");
         }
 
-        let user = await User.findOne({ discordId: session.discordId });
-        if (!user) {
-            user = new User({ discordId: session.discordId });
-            await user.save();
-        }
+        let user = await User.findOne({ discordId: session.discordId }) || new User({ discordId: session.discordId });
+        await user.save(); // Save default if new
 
-        res.render('dashboard', { user, boss: worldBoss, token: req.params.token });
+        res.render('dashboard', { user, token: req.params.token });
     } catch (err) {
-        res.status(500).send("Digital World Error: " + err.message);
+        res.status(500).send("Digital World Crash: " + err.message);
     }
 });
 
-// 4. Attack Boss Logic
-app.post('/attack-boss', async (req, res) => {
+// The Arena: Dynamic AI Combat Logic
+app.post('/duel-ai', async (req, res) => {
     const { token, monsterId } = req.body;
     const session = activeTokens.get(token);
-    if (!session) return res.json({ success: false });
+    if (!session) return res.json({ success: false, msg: "Session expired." });
 
-    const user = await User.findOne({ discordId: session.discordId });
-    const monster = user.monsters.id(monsterId);
-    
-    const damage = monster.atk + Math.floor(Math.random() * 10);
-    worldBoss.hp -= damage;
-    user.essence += 10; 
-    
-    await user.save();
-    res.json({ success: true, damage, bossHp: worldBoss.hp });
+    const user = await User.findOne({ discordId: session.id });
+    const playerMon = user.monsters.id(monsterId);
+
+    try {
+        // Generate a random AI Opponent relative to player strength
+        const enemy = await generateMonsterData(`Generate an enemy to duel ${playerMon.name} (${playerMon.element}). Level: ${playerMon.level}`, true);
+
+        let battleLog = [];
+        let pHP = playerMon.hp;
+        let eHP = enemy.hp;
+
+        // Turn-based Battle Simulation
+        while (pHP > 0 && eHP > 0) {
+            // Player Attack
+            const pDmg = Math.max(10, playerMon.atk - (enemy.def * 0.5) + Math.floor(Math.random() * 10));
+            eHP -= pDmg;
+            battleLog.push(`${playerMon.name} dealt ${pDmg} DMG. Enemy HP: ${Math.max(0, eHP)}`);
+
+            if (eHP <= 0) break;
+
+            // Enemy Attack
+            const eDmg = Math.max(10, enemy.atk - (playerMon.def * 0.5) + Math.floor(Math.random() * 10));
+            pHP -= eDmg;
+            battleLog.push(`${enemy.name} counters with ${eDmg} DMG. Your HP: ${Math.max(0, pHP)}`);
+        }
+
+        const victory = pHP > 0;
+        if (victory) {
+            user.essence += 300;
+            user.history.wins += 1;
+        } else {
+            user.history.losses += 1;
+        }
+
+        await user.save();
+        res.json({ success: true, victory, log: battleLog, enemy });
+    } catch (e) {
+        res.json({ success: false, msg: "Combat AI failed to initialize." });
+    }
 });
 
-// 5. Evolution Logic
+// Evolution Engine
 app.post('/evolve', async (req, res) => {
     const { token, monsterId } = req.body;
     const session = activeTokens.get(token);
     const user = await User.findOne({ discordId: session.discordId });
     const monster = user.monsters.id(monsterId);
 
-    if (user.essence < 300) return res.json({ success: false, msg: "Need 300 Essence" });
+    if (user.essence < 500) return res.json({ success: false, msg: "Insufficient Essence" });
 
     try {
-        const prompt = `Evolve ${monster.name}. New level: ${monster.level + 1}. 
-        Return JSON: {"name": "NewName", "bio": "NewBio", "atk": ${monster.atk + 20}, "hp": ${monster.hp + 50}, "element": "${monster.element}"}`;
-        
-        const data = await generateAI(prompt);
-        Object.assign(monster, data);
+        const mutation = await generateMonsterData(`Mutate and evolve ${monster.name} (${monster.element}) into a stronger form.`);
+        Object.assign(monster, mutation);
         monster.level += 1;
-        user.essence -= 300;
-        
+        user.essence -= 500;
         await user.save();
         res.json({ success: true });
     } catch (e) { res.json({ success: false }); }
-});
-
-// 6. Merging Logic
-app.post('/merge', async (req, res) => {
-    const { token, id1, id2 } = req.body;
-    const session = activeTokens.get(token);
-    const user = await User.findOne({ discordId: session.discordId });
-
-    const m1 = user.monsters.id(id1);
-    const m2 = user.monsters.id(id2);
-
-    const prompt = `Merge ${m1.name} and ${m2.name}. Return JSON: {"name": "HybridName", "element": "Hybrid", "atk": ${m1.atk + m2.atk}, "hp": ${m1.hp + m2.hp}, "bio": "Combined Lore"}`;
-    const data = await generateAI(prompt);
-
-    user.monsters.pull(id1);
-    user.monsters.pull(id2);
-    user.monsters.push({...data, emoji: "🧬"});
-    await user.save();
-
-    res.json({ success: true });
 });
 
 // --- STARTUP ---
 const PORT = process.env.PORT || 3000;
 mongoose.connect(process.env.MONGO_URI)
     .then(() => {
-        console.log("🌌 Digital World Engine Live.");
+        console.log("🌌 Zandymon Master Core Online.");
         app.listen(PORT);
     })
-    .catch(err => console.error("Database connection error:", err));
+    .catch(err => console.error("Database connection failed:", err));
