@@ -22,7 +22,7 @@ const getElementRarity = (rank) => {
 // --- CORE ENGINE ---
 
 async function generateMonster(type, data) {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
     const rarity = getElementRarity(data.rank);
     
     let prompt = "";
