@@ -23,125 +23,124 @@ const elementProfiles = {
     "aura": "🌸", "spectre": "👻", "chrono": "⏳", "vortex": "🌪️"
 };
 
-// --- AI CORE ---
+// --- AI CORE: THE ARCHITECT ---
 async function askGemini(prompt) {
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-    const strictPrompt = `${prompt}. RETURN ONLY RAW JSON. NO MARKDOWN.
-    FORMAT: {"name": "Name", "element": "Type", "elLore": "Lore", "atk": 50, "def": 30, "hp": 250, "bio": "Bio"}`;
-    
-    const result = await model.generateContent(strictPrompt);
+    const result = await model.generateContent(prompt + ". RETURN ONLY RAW JSON. NO MARKDOWN.");
     let text = result.response.text().replace(/```json|```/g, "").trim();
-    const data = JSON.parse(text);
-    
-    return {
-        ...data,
-        atk: Number(data.atk) || 50,
-        def: Number(data.def) || 30,
-        hp: Number(data.hp) || 250,
-        level: 1,
-        emoji: elementProfiles[String(data.element).toLowerCase()] || "💎"
-    };
+    return JSON.parse(text);
 }
 
 // --- ENDPOINTS ---
 
+// 1. /spawn, /collection, /claim (Kept from previous version)
 app.post('/spawn', async (req, res) => {
-    // FALLBACK: If BotGhost sends a weird variable, we try to catch it
-    const id = req.body.id || req.body.user_id || req.body.userID;
-    const { description } = req.body;
-
-    if (!id || id === "undefined") {
-        return res.json({ text: "❌ Error: Bot sent an undefined User ID. Check BotGhost variables." });
-    }
-
+    const id = req.body.id || req.body.user_id;
     try {
-        const monster = await askGemini(`Create monster: ${description}`);
-        let user = await User.findOne({ discordId: String(id) });
-        
-        if (!user) {
-            user = new User({ discordId: String(id), monsters: [] });
-        }
-
+        const data = await askGemini(`Create a monster based on: ${req.body.description}. Format: {"name":"N","element":"E","elLore":"L","atk":50,"def":30,"hp":250,"bio":"B"}`);
+        let user = await User.findOne({ discordId: String(id) }) || new User({ discordId: String(id) });
+        const monster = { ...data, level: 1, emoji: elementProfiles[data.element.toLowerCase()] || "💎" };
         user.monsters.push(monster);
-        user.markModified('monsters'); 
+        user.markModified('monsters');
         await user.save();
-
-        console.log(`[SUCCESS] Saved ${monster.name} to ID: ${id}`);
-
-        res.json({
-            text: `${monster.emoji} **${monster.name}** has crossed the rift!\n\n**Type:** ${monster.element}\n**Lore:** ${monster.elLore}\n**Stats:** ❤️ ${monster.hp} | ⚔️ ${monster.atk}\n\n*${monster.bio}*`
-        });
-    } catch (e) {
-        res.json({ text: "⚠️ Rift error. Try again." });
-    }
+        res.json({ text: `${monster.emoji} **${monster.name}** has materialized!\n**Lore:** ${monster.elLore}` });
+    } catch (e) { res.json({ text: "⚠️ Spawn failed." }); }
 });
 
 app.post('/collection', async (req, res) => {
-    const id = req.body.id || req.body.user_id || req.body.userID;
-    
+    const id = req.body.id || req.body.user_id;
+    const user = await User.findOne({ discordId: String(id) });
+    if (!user || user.monsters.length === 0) return res.json({ text: "📭 Empty." });
+    let list = `📂 **Digital Bestiary** | 💰 Essence: ${user.essence}\n\n`;
+    user.monsters.forEach((m, i) => {
+        list += `**[${i + 1}]** ${m.emoji} **${m.name}** (Lv.${m.level})\n   *${m.element} | ⚔️ ${m.atk} | ❤️ ${m.hp} HP*\n\n`;
+    });
+    res.json({ text: list });
+});
+
+// 2. /battle (With AI Narration)
+app.post('/battle', async (req, res) => {
+    const id = req.body.id || req.body.user_id;
+    const user = await User.findOne({ discordId: String(id) });
+    const idx = parseInt(req.body.monsterIndex) - 1;
+    if (!user || !user.monsters[idx]) return res.json({ text: "❌ Invalid selection." });
+
+    const pMon = user.monsters[idx];
     try {
-        const user = await User.findOne({ discordId: String(id) });
+        const battleData = await askGemini(`Narate a fight between Player Monster (${pMon.name}, Element: ${pMon.element}) and a random AI Rival. 
+        Decide a winner based on stats (Player Atk: ${pMon.atk}). 
+        Format: {"enemyName":"N","narration":"3-sentence epic description of the clash","victory":true/false}`);
 
-        if (!user || !user.monsters || user.monsters.length === 0) {
-            return res.json({ text: `📭 Collection empty for ID: ${id}. Run \`/spawn\` first!` });
-        }
+        if (battleData.victory) user.essence += 250;
+        await user.save();
 
-        let list = `📂 **Digital Bestiary [Total: ${user.monsters.length}]**\n💰 Essence: ${user.essence}\n\n`;
-        user.monsters.forEach((m, i) => {
-            list += `**[${i + 1}]** ${m.emoji} **${m.name}** (Lv.${m.level})\n   *${m.element} | ⚔️ ${m.atk} | ❤️ ${m.hp} HP*\n\n`;
-        });
+        res.json({ text: `⚔️ **ARENA: ${pMon.name} vs ${battleData.enemyName}**\n\n${battleData.narration}\n\n${battleData.victory ? "🏆 **VICTORY!** +250 Essence." : "💀 **DEFEAT.**"}` });
+    } catch (e) { res.json({ text: "⚠️ Arena glitch." }); }
+});
 
-        res.json({ text: list });
-    } catch (e) {
-        res.json({ text: "⚠️ Database error." });
+// 3. /evolve (Mutation) - Costs 1000 Essence
+app.post('/evolve', async (req, res) => {
+    const id = req.body.id || req.body.user_id;
+    const user = await User.findOne({ discordId: String(id) });
+    const idx = parseInt(req.body.monsterIndex) - 1;
+
+    if (!user || !user.monsters[idx] || user.essence < 1000) {
+        return res.json({ text: "❌ Needs 1000 Essence or invalid monster." });
     }
+
+    const m = user.monsters[idx];
+    try {
+        const mutation = await askGemini(`Mutate ${m.name} into a stronger version. 
+        Format: {"name":"NewName","atk":${m.atk + 30},"hp":${m.hp + 100},"bio":"New history"}`);
+        
+        user.monsters[idx] = { ...m, ...mutation, level: m.level + 1 };
+        user.essence -= 1000;
+        user.markModified('monsters');
+        await user.save();
+
+        res.json({ text: `✨ **EVOLUTION!**\n${m.name} has mutated into **${mutation.name}** (Lv.${m.level + 1})!\nStats increased: ⚔️ ${mutation.atk} | ❤️ ${mutation.hp}` });
+    } catch (e) { res.json({ text: "⚠️ Evolution failed." }); }
+});
+
+// 4. /merge (Fusion) - Combines two monsters
+app.post('/merge', async (req, res) => {
+    const id = req.body.id || req.body.user_id;
+    const user = await User.findOne({ discordId: String(id) });
+    const i1 = parseInt(req.body.idx1) - 1;
+    const i2 = parseInt(req.body.idx2) - 1;
+
+    if (!user || !user.monsters[i1] || !user.monsters[i2] || i1 === i2) {
+        return res.json({ text: "❌ Select two different monsters." });
+    }
+
+    const m1 = user.monsters[i1];
+    const m2 = user.monsters[i2];
+
+    try {
+        const fusion = await askGemini(`Fuse ${m1.name} and ${m2.name}. 
+        Format: {"name":"FusionName","element":"Hybrid","elLore":"Fusion lore","atk":${m1.atk + m2.atk},"hp":${m1.hp + m2.hp},"bio":"Merged bio"}`);
+
+        // Remove old monsters
+        user.monsters = user.monsters.filter((_, index) => index !== i1 && index !== i2);
+        
+        const newMon = { ...fusion, level: 1, emoji: "🧬" };
+        user.monsters.push(newMon);
+        user.markModified('monsters');
+        await user.save();
+
+        res.json({ text: `🧬 **FUSION COMPLETE!**\n${m1.name} + ${m2.name} = **${newMon.name}**\n**Hybrid Stats:** ⚔️ ${newMon.atk} | ❤️ ${newMon.hp}` });
+    } catch (e) { res.json({ text: "⚠️ Fusion failed." }); }
 });
 
 app.post('/claim', async (req, res) => {
-    const id = req.body.id || req.body.user_id || req.body.userID;
-    try {
-        let user = await User.findOne({ discordId: String(id) });
-        if (!user) user = new User({ discordId: String(id) });
-
-        const now = new Date();
-        const day = 24 * 60 * 60 * 1000;
-
-        if (now - user.lastClaimed < day) {
-            return res.json({ text: "⏳ Core recharging. Try again later." });
-        }
-
-        user.essence += 500;
-        user.lastClaimed = now;
-        await user.save();
-        res.json({ text: `✨ **Essence Infused!** Total: 💰 **${user.essence}**` });
-    } catch (e) { res.json({ text: "⚠️ Claim error." }); }
-});
-
-app.post('/battle', async (req, res) => {
-    const id = req.body.id || req.body.user_id || req.body.userID;
-    const { monsterIndex } = req.body;
-    
-    try {
-        const user = await User.findOne({ discordId: String(id) });
-        const idx = parseInt(monsterIndex) - 1;
-
-        if (!user || !user.monsters[idx]) return res.json({ text: "❌ Invalid monster." });
-
-        const pMon = user.monsters[idx];
-        const enemy = await askGemini(`Rival for ${pMon.name}`);
-
-        let log = `⚔️ **ARENA: ${pMon.name} vs ${enemy.name}**\n\n`;
-        if (pMon.atk >= (enemy.atk * 0.8)) {
-            user.essence += 250;
-            log += `🏆 **Victory!** +250 Essence.`;
-        } else {
-            log += `💀 **Defeat.**`;
-        }
-
-        user.markModified('essence');
-        await user.save();
-        res.json({ text: log });
-    } catch (e) { res.json({ text: "⚠️ Battle error." }); }
+    const id = req.body.id || req.body.user_id;
+    let user = await User.findOne({ discordId: String(id) }) || new User({ discordId: String(id) });
+    const now = new Date();
+    if (now - user.lastClaimed < 86400000) return res.json({ text: "⏳ Not yet." });
+    user.essence += 500;
+    user.lastClaimed = now;
+    await user.save();
+    res.json({ text: `💰 +500 Essence!` });
 });
 
 const PORT = process.env.PORT || 3000;
