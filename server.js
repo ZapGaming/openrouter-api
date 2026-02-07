@@ -1,203 +1,157 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const crypto = require('crypto');
-const path = require('path');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 require('dotenv').config();
 
 const app = express();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const activeTokens = new Map();
 
-// --- CONFIG & MIDDLEWARE ---
-app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname, 'views'));
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// --- ADVANCED ELEMENT & EMOJI SYSTEM ---
-const elementProfiles = {
-    "inferno": "🔥", "abyssal": "🌑", "cyber": "📡", "void": "🌀", 
-    "celestial": "✨", "bio-hazard": "☣️", "plasma": "⚡", "glitch": "👾",
-    "spectre": "👻", "chrono": "⏳", "nebula": "🌌", "titan": "🏔️"
-};
-
-const getEmoji = (el) => {
-    if (!el) return "💠";
-    return elementProfiles[el.toLowerCase()] || "💎"; 
-};
 
 // --- DATABASE ARCHITECTURE ---
 const userSchema = new mongoose.Schema({
     discordId: String,
     essence: { type: Number, default: 1000 },
-    rank: { type: String, default: "Unranked" },
-    history: { wins: { type: Number, default: 0 }, losses: { type: Number, default: 0 } },
+    lastClaimed: { type: Date, default: new Date(0) }, // For the /claim logic
     monsters: [{
         name: String,
         element: String,
-        elLore: String, // Deep description of the custom element
+        elLore: String, 
         emoji: String,
-        rarity: String,
-        level: { type: Number, default: 1 },
         atk: Number,
         def: Number,
         spd: Number,
         hp: Number,
-        maxHp: Number,
+        level: { type: Number, default: 1 },
         bio: String
     }]
 });
 const User = mongoose.model('User', userSchema);
 
-// --- AI CORE: MONSTER ARCHITECT ---
-async function generateMonsterData(promptStr, isEnemy = false) {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-    
-    // Strict prompt to force full stats and lore
-    const fullPrompt = `${promptStr}. Return ONLY a JSON object: {
-        "name": "Unique Name",
-        "element": "Custom Element Type",
-        "elLore": "Detailed description of the element's power",
-        "rarity": "Legendary/Elite/Common",
-        "atk": 50, "def": 30, "spd": 25, "hp": 250,
-        "bio": "Deep lore history"
-    }`;
+// --- EMOJI ENGINE ---
+const elementProfiles = {
+    "inferno": "🔥", "abyssal": "🌑", "cyber": "📡", "void": "🌀", 
+    "celestial": "✨", "bio-hazard": "☣️", "plasma": "⚡", "glitch": "👾",
+    "spectre": "👻", "chrono": "⏳", "nebula": "🌌", "titan": "🏔️", "vortex": "🌪️"
+};
+const getEmoji = (el) => elementProfiles[el.toLowerCase()] || "💎";
 
-    const result = await model.generateContent(fullPrompt);
-    const response = await result.response;
-    const cleaned = response.text().replace(/```json|```/g, "").trim();
-    const data = JSON.parse(cleaned);
-
-    // Finalize stats and assign visual icons
-    data.maxHp = data.hp || 200;
-    data.emoji = getEmoji(data.element);
-    return data;
+// --- AI CORE HELPER ---
+async function askGemini(prompt) {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const result = await model.generateContent(prompt + ". Return ONLY raw JSON.");
+    const text = result.response.text().replace(/```json|```/g, "").trim();
+    return JSON.parse(text);
 }
 
-// --- DISCORD PORTAL ROUTES ---
+// --- DISCORD COMMAND ENDPOINTS ---
 
-// Endpoint for /dashboard - Secure Token Generation
-app.post('/generate-link', (req, res) => {
-    const { id } = req.body;
-    if (!id) return res.json({ text: "Identification failed. Link aborted." });
-
-    const token = crypto.randomBytes(32).toString('hex');
-    activeTokens.set(token, { discordId: id, expires: Date.now() + 7200000 }); // 2-hour window
-
-    res.json({ text: `🌐 **Portal Decrypted.** Access granted for 2h:\nhttps://${req.get('host')}/dash/${token}` });
-});
-
-// Endpoint for /spawn - Initial Creation
-app.post('/monster', async (req, res) => {
-    const { description, rank, id } = req.body;
+// 1. /spawn 
+app.post('/spawn', async (req, res) => {
+    const { id, description } = req.body;
     try {
-        const monster = await generateMonsterData(`Create a powerful creature based on: ${description}. Rank: ${rank}`);
+        const prompt = `Generate a monster: ${description}. Include: name, element, elLore (element origin), atk, def, spd, hp, bio.`;
+        const data = await askGemini(prompt);
         
-        let user = await User.findOne({ discordId: id });
-        if (!user) user = new User({ discordId: id });
+        let user = await User.findOne({ discordId: id }) || new User({ discordId: id });
+        
+        const monster = {
+            ...data,
+            emoji: getEmoji(data.element),
+            hp: data.hp || 200,
+            atk: data.atk || 40
+        };
 
         user.monsters.push(monster);
         await user.save();
 
-        res.json({ 
-            text: `${monster.emoji} **${monster.name}** [${monster.element}]\n**Lore:** ${monster.elLore}\n**Stats:** ❤️ ${monster.hp} | ⚔️ ${monster.atk} | 🛡️ ${monster.def}` 
+        res.json({
+            text: `${monster.emoji} **${monster.name}** has crossed the rift!\n\n**Type:** ${monster.element}\n**Lore:** ${monster.elLore}\n**Stats:** ❤️ ${monster.hp} | ⚔️ ${monster.atk} | 🛡️ ${monster.def}\n\n*${monster.bio}*`
         });
-    } catch (err) {
-        res.json({ text: "⚠️ The digital rift is unstable. Creation failed." });
-    }
+    } catch (e) { res.json({ text: "⚠️ Rift instability. Try spawning again." }); }
 });
 
-// --- WEBSITE GAME ROUTES ---
+// 2. /monster_collection
+app.post('/collection', async (req, res) => {
+    const { id } = req.body;
+    const user = await User.findOne({ discordId: id });
 
-// Main Dashboard: Load World & Monsters
-app.get('/dash/:token', async (req, res) => {
-    try {
-        const session = activeTokens.get(req.params.token);
-        if (!session || Date.now() > session.expires) {
-            return res.status(403).send("<h1>Session Terminated</h1><p>Generate a new portal in Discord.</p>");
-        }
-
-        let user = await User.findOne({ discordId: session.discordId }) || new User({ discordId: session.discordId });
-        await user.save(); // Save default if new
-
-        res.render('dashboard', { user, token: req.params.token });
-    } catch (err) {
-        res.status(500).send("Digital World Crash: " + err.message);
+    if (!user || user.monsters.length === 0) {
+        return res.json({ text: "📭 Your collection is empty. Use `/spawn` to begin." });
     }
+
+    let list = `📂 **${id}'s Digital Bestiary**\n💰 Essence: ${user.essence}\n\n`;
+    user.monsters.forEach((m, i) => {
+        list += `**[${i + 1}]** ${m.emoji} **${m.name}** (Lv.${m.level})\n   *${m.element} | ⚔️ ${m.atk} ATK | ❤️ ${m.hp} HP*\n\n`;
+    });
+
+    res.json({ text: list });
 });
 
-// The Arena: Dynamic AI Combat Logic
-app.post('/duel-ai', async (req, res) => {
-    const { token, monsterId } = req.body;
-    const session = activeTokens.get(token);
-    if (!session) return res.json({ success: false, msg: "Session expired." });
+// 3. /battle (AI Duel)
+app.post('/battle', async (req, res) => {
+    const { id, monsterIndex } = req.body; // BotGhost should pass index (e.g., 0 for first monster)
+    const user = await User.findOne({ discordId: id });
+    
+    if (!user || !user.monsters[monsterIndex]) {
+        return res.json({ text: "❌ Invalid monster selection." });
+    }
 
-    const user = await User.findOne({ discordId: session.id });
-    const playerMon = user.monsters.id(monsterId);
+    const pMon = user.monsters[monsterIndex];
 
     try {
-        // Generate a random AI Opponent relative to player strength
-        const enemy = await generateMonsterData(`Generate an enemy to duel ${playerMon.name} (${playerMon.element}). Level: ${playerMon.level}`, true);
-
-        let battleLog = [];
-        let pHP = playerMon.hp;
+        const enemy = await askGemini(`Generate a rival monster to fight ${pMon.name}. Strength level ${pMon.level}.`);
+        
+        let log = `⚔️ **BATTLE INITIATED** ⚔️\n**${pMon.name}** vs **${enemy.name}** (${enemy.element})\n\n`;
+        let pHP = pMon.hp;
         let eHP = enemy.hp;
 
-        // Turn-based Battle Simulation
+        // Fast Combat Logic
         while (pHP > 0 && eHP > 0) {
-            // Player Attack
-            const pDmg = Math.max(10, playerMon.atk - (enemy.def * 0.5) + Math.floor(Math.random() * 10));
+            const pDmg = Math.max(10, pMon.atk - (enemy.def * 0.5) + 5);
             eHP -= pDmg;
-            battleLog.push(`${playerMon.name} dealt ${pDmg} DMG. Enemy HP: ${Math.max(0, eHP)}`);
-
             if (eHP <= 0) break;
-
-            // Enemy Attack
-            const eDmg = Math.max(10, enemy.atk - (playerMon.def * 0.5) + Math.floor(Math.random() * 10));
+            const eDmg = Math.max(10, enemy.atk - (pMon.def * 0.5) + 5);
             pHP -= eDmg;
-            battleLog.push(`${enemy.name} counters with ${eDmg} DMG. Your HP: ${Math.max(0, pHP)}`);
         }
 
         const victory = pHP > 0;
         if (victory) {
-            user.essence += 300;
-            user.history.wins += 1;
+            user.essence += 200;
+            log += `✅ **Victory!** ${pMon.name} dominated the arena.\n💰 +200 Essence rewarded.`;
         } else {
-            user.history.losses += 1;
+            log += `💀 **Defeat.** ${enemy.name} was too powerful.`;
         }
 
         await user.save();
-        res.json({ success: true, victory, log: battleLog, enemy });
-    } catch (e) {
-        res.json({ success: false, msg: "Combat AI failed to initialize." });
+        res.json({ text: log });
+    } catch (e) { res.json({ text: "⚠️ Combat AI offline." }); }
+});
+
+// 4. /claim (Daily Essence)
+app.post('/claim', async (req, res) => {
+    const { id } = req.body;
+    let user = await User.findOne({ discordId: id }) || new User({ discordId: id });
+
+    const now = new Date();
+    const diff = now - user.lastClaimed;
+    const hours24 = 24 * 60 * 60 * 1000;
+
+    if (diff < hours24) {
+        const timeLeft = Math.ceil((hours24 - diff) / (60 * 60 * 1000));
+        return res.json({ text: `⏳ Patience, Wanderer. You can claim again in **${timeLeft} hours**.` });
     }
+
+    user.essence += 500;
+    user.lastClaimed = now;
+    await user.save();
+
+    res.json({ text: `✨ **Essence Infused!**\n+500 Essence added to your core.\nTotal: 💰 **${user.essence}**` });
 });
 
-// Evolution Engine
-app.post('/evolve', async (req, res) => {
-    const { token, monsterId } = req.body;
-    const session = activeTokens.get(token);
-    const user = await User.findOne({ discordId: session.discordId });
-    const monster = user.monsters.id(monsterId);
-
-    if (user.essence < 500) return res.json({ success: false, msg: "Insufficient Essence" });
-
-    try {
-        const mutation = await generateMonsterData(`Mutate and evolve ${monster.name} (${monster.element}) into a stronger form.`);
-        Object.assign(monster, mutation);
-        monster.level += 1;
-        user.essence -= 500;
-        await user.save();
-        res.json({ success: true });
-    } catch (e) { res.json({ success: false }); }
-});
-
-// --- STARTUP ---
+// STARTUP
 const PORT = process.env.PORT || 3000;
-mongoose.connect(process.env.MONGO_URI)
-    .then(() => {
-        console.log("🌌 Zandymon Master Core Online.");
-        app.listen(PORT);
-    })
-    .catch(err => console.error("Database connection failed:", err));
+mongoose.connect(process.env.MONGO_URI).then(() => {
+    console.log("🌌 Discord Game Engine Active.");
+    app.listen(PORT);
+});
