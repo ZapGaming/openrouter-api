@@ -1,18 +1,51 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <title>zandymon world</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <style>
-        body { background: #11111b; color: #cdd6f4; font-family: monospace; }
-        #boss-arena { border: 2px solid #fab387; width: 800px; height: 400px; margin: auto; }
+        body { background: #11111b; color: #cdd6f4; font-family: 'jetbrain mono', monospace; margin: 0; }
+        .nav { background: #181825; padding: 10px; border-bottom: 2px solid #fab387; display: flex; justify-content: space-around; }
+        #boss-arena { width: 100%; height: 300px; background: #1e1e2e; }
+        .monster-list { display: flex; gap: 20px; padding: 20px; overflow-x: auto; }
+        .monster-card { background: #313244; padding: 15px; border-radius: 10px; border: 1px solid #585b70; min-width: 200px; }
+        button { background: #fab387; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; color: #11111b; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h1>zandymon digital world</h1>
+    <div class="nav">
+        <span>💰 essence: <%= user.essence %></span>
+        <span>🏆 rank: <%= user.rank %></span>
+    </div>
+
     <div id="boss-arena"></div>
+
+    <div class="monster-list">
+        <% user.monsters.forEach(m => { %>
+            <div class="monster-card">
+                <h3><%= m.name %></h3>
+                <p>lvl <%= m.level %> | <%= m.element %></p>
+                <button onclick="evolve('<%= m._id %>')">🧬 evolve</button>
+                <button onclick="attackBoss('<%= m._id %>')">⚔️ attack boss</button>
+            </div>
+        <% }) %>
+    </div>
+
     <script>
-        // phaser logic for world boss animations goes here
-        console.log("world boss arena initialized");
+        const token = "<%= token %>";
+        async function evolve(id) {
+            const res = await fetch('/evolve', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ token, monsterId: id })
+            });
+            const data = await res.json();
+            if (data.success) location.reload();
+            else alert(data.msg);
+        }
+        
+        // phaser logic for the boss would go here
+        console.log("digital world live.");
     </script>
 </body>
 </html>
