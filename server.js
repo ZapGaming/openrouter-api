@@ -40,7 +40,7 @@ let worldBoss = {
 
 // 3. AI HELPER FUNCTION
 async function generateAIContent(prompt) {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
     const result = await model.generateContent(prompt);
     const response = await result.response;
     return JSON.parse(response.text().replace(/```json|```/g, "").trim());
