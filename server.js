@@ -1,18 +1,23 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const crypto = require('crypto');
+const path = require('path');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 require('dotenv').config();
 
 const app = express();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+// Temporary session storage for the 2-hour links
 const activeTokens = new Map();
 
+// --- CRITICAL APP CONFIG ---
 app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
-// 1. MONGODB SCHEMA
+// --- DATABASE SCHEMA ---
 const userSchema = new mongoose.Schema({
     discordId: String,
     essence: { type: Number, default: 500 },
@@ -22,123 +27,152 @@ const userSchema = new mongoose.Schema({
         element: String,
         rarity: String,
         level: { type: Number, default: 1 },
-        atk: { type: Number, default: 10 },
-        hp: { type: Number, default: 100 },
+        atk: { type: Number, default: 20 },
+        hp: { type: Number, default: 120 },
         bio: String
     }]
 });
 const User = mongoose.model('User', userSchema);
 
-// 2. WORLD BOSS STATE (Stored in memory for now)
+// --- WORLD BOSS DATA ---
 let worldBoss = {
-    name: "The Void Titan",
+    name: "The Monolith of Void",
     hp: 100000,
     maxHp: 100000,
-    element: "Void",
-    rewards: 5000
+    element: "Entropy"
 };
 
-// 3. AI HELPER FUNCTION
-async function generateAIContent(prompt) {
+// --- AI ENGINE HELPER ---
+async function generateAI(prompt) {
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
     const result = await model.generateContent(prompt);
     const response = await result.response;
-    return JSON.parse(response.text().replace(/```json|```/g, "").trim());
+    const cleaned = response.text().replace(/```json|```/g, "").trim();
+    return JSON.parse(cleaned);
 }
 
-// 4. DISCORD ENDPOINT: SPAWN
+// --- DISCORD PORTAL ROUTES ---
+
+// 1. Generate Link for BotGhost /dashboard
+app.post('/generate-link', (req, res) => {
+    const { id } = req.body;
+    if (!id) return res.json({ text: "Error: No Discord ID provided." });
+
+    const token = crypto.randomBytes(16).toString('hex');
+    // Save token for 2 hours
+    activeTokens.set(token, { discordId: id, expires: Date.now() + 7200000 });
+    
+    res.json({ text: `🔗 **Portal Open (2h):** https://${req.get('host')}/dash/${token}` });
+});
+
+// 2. Spawn Monster for BotGhost /spawn
 app.post('/monster', async (req, res) => {
     const { description, rank, id } = req.body;
     try {
-        const prompt = `Create a monster RPG profile for: ${description}. Rank: ${rank}. 
-        Return JSON ONLY: {"name": "string", "element": "string", "rarity": "string", "atk": number, "hp": number, "bio": "string"}`;
+        const prompt = `Create a monster RPG profile for: ${description}. User Rank: ${rank}. 
+        Return JSON: {"name": "Name", "element": "Type", "rarity": "Common/Rare/Epic", "atk": 25, "hp": 150, "bio": "Lore"}`;
         
-        const data = await generateAIContent(prompt);
+        const data = await generateAI(prompt);
         let user = await User.findOne({ discordId: id }) || new User({ discordId: id });
         
         user.monsters.push(data);
         await user.save();
 
-        res.json({ text: `👾 **${data.name}** birthed!\n🧬 **Element:** ${data.element}\n📜 *${data.bio}*` });
+        res.json({ text: `👾 **${data.name}** has materialized!\n🧬 **Element:** ${data.element}\n📝 *${data.bio}*` });
     } catch (err) {
-        res.status(500).json({ text: "The portal collapsed. AI failed to spawn." });
+        res.json({ text: "⚠️ The rift collapsed. Try again." });
     }
 });
 
-// 5. DISCORD ENDPOINT: DASHBOARD LINK
-app.post('/generate-link', (req, res) => {
-    const { id } = req.body;
-    const token = crypto.randomBytes(16).toString('hex');
-    activeTokens.set(token, { discordId: id, expires: Date.now() + 7200000 }); // 2 hours
-    res.json({ text: `🔗 **Secure Portal:** https://${req.get('host')}/dash/${token}` });
-});
+// --- WEBSITE DASHBOARD ROUTES ---
 
-// 6. WEBSITE: DASHBOARD VIEW
+// 3. The Digital World Dashboard (The Website)
 app.get('/dash/:token', async (req, res) => {
-    const session = activeTokens.get(req.params.token);
-    if (!session || Date.now() > session.expires) return res.send("Token expired.");
-    
-    const user = await User.findOne({ discordId: session.discordId });
-    res.render('dashboard', { user, boss: worldBoss, token: req.params.token });
+    try {
+        const session = activeTokens.get(req.params.token);
+        if (!session || Date.now() > session.expires) {
+            return res.status(403).send("<h1>Link Expired</h1><p>Generate a new link in Discord.</p>");
+        }
+
+        // FAILSAFE: Ensure user exists so .essence doesn't crash
+        let user = await User.findOne({ discordId: session.discordId });
+        if (!user) {
+            user = new User({ discordId: session.discordId });
+            await user.save();
+        }
+
+        res.render('dashboard', { user, boss: worldBoss, token: req.params.token });
+    } catch (err) {
+        res.status(500).send(`Server Error: ${err.message}`);
+    }
 });
 
-// 7. WEBSITE: EVOLUTION LOGIC
+// 4. Evolution Logic (Site)
 app.post('/evolve', async (req, res) => {
     const { token, monsterId } = req.body;
     const session = activeTokens.get(token);
-    if (!session) return res.json({ success: false });
+    if (!session) return res.json({ success: false, msg: "Session expired" });
 
     const user = await User.findOne({ discordId: session.discordId });
     const monster = user.monsters.id(monsterId);
 
-    if (user.essence < 300) return res.json({ success: false, msg: "Need 300 Essence" });
+    if (user.essence < 300) return res.json({ success: false, msg: "Not enough Essence (Need 300)" });
 
-    const prompt = `Evolve ${monster.name} (${monster.element}). Level up! Return JSON: {"name": "new", "bio": "new", "hp": ${monster.hp + 50}, "atk": ${monster.atk + 15}}`;
-    const data = await generateAIContent(prompt);
-
-    Object.assign(monster, data);
-    monster.level += 1;
-    user.essence -= 300;
-    await user.save();
-
-    res.json({ success: true, monster });
+    try {
+        const prompt = `Evolve ${monster.name} (${monster.element}). Level it up. Return JSON: {"name": "New Name", "bio": "New Bio", "atk": ${monster.atk + 20}, "hp": ${monster.hp + 50}}`;
+        const data = await generateAI(prompt);
+        
+        Object.assign(monster, data);
+        monster.level += 1;
+        user.essence -= 300;
+        await user.save();
+        
+        res.json({ success: true });
+    } catch (e) { res.json({ success: false, msg: "AI Evolution Failed" }); }
 });
 
-// 8. WEBSITE: MERGING LOGIC
+// 5. Merging Logic (Site)
 app.post('/merge', async (req, res) => {
-    const { token, id1, id2 } = req.body;
+    const { token, m1Id, m2Id } = req.body;
     const session = activeTokens.get(token);
     const user = await User.findOne({ discordId: session.discordId });
 
-    const m1 = user.monsters.id(id1);
-    const m2 = user.monsters.id(id2);
+    if (user.monsters.length < 2) return res.json({ success: false, msg: "Need 2 monsters" });
 
-    const prompt = `Merge ${m1.name} and ${m2.name} into a hybrid. Return JSON: {"name": "string", "element": "hybrid", "atk": ${m1.atk + m2.atk}, "hp": ${m1.hp + m2.hp}, "bio": "string"}`;
-    const data = await generateAIContent(prompt);
+    const m1 = user.monsters.id(m1Id);
+    const m2 = user.monsters.id(m2Id);
 
-    user.monsters.pull(id1);
-    user.monsters.pull(id2);
+    const prompt = `Combine ${m1.name} and ${m2.name}. Mix their descriptions. Return JSON: {"name": "Hybrid Name", "element": "Combined", "atk": ${m1.atk + m2.atk}, "hp": ${m1.hp + m2.hp}, "bio": "New Bio"}`;
+    const data = await generateAI(prompt);
+
+    user.monsters.pull(m1Id);
+    user.monsters.pull(m2Id);
     user.monsters.push(data);
     await user.save();
 
     res.json({ success: true });
 });
 
-// 9. WEBSITE: WORLD BOSS ATTACK
+// 6. World Boss Logic (Site)
 app.post('/attack-boss', async (req, res) => {
-    const { monsterId, token } = req.body;
+    const { token, monsterId } = req.body;
     const session = activeTokens.get(token);
     const user = await User.findOne({ discordId: session.discordId });
     const monster = user.monsters.id(monsterId);
 
-    worldBoss.hp -= monster.atk;
-    user.essence += 10; // Reward for attacking
+    const damage = monster.atk + Math.floor(Math.random() * 10);
+    worldBoss.hp -= damage;
+    user.essence += 10; // Bounty for attacking
+    
     await user.save();
-
-    res.json({ success: true, bossHp: worldBoss.hp, damage: monster.atk });
+    res.json({ success: true, damage, bossHp: worldBoss.hp });
 });
 
-// STARTUP
-mongoose.connect(process.env.MONGO_URI).then(() => {
-    app.listen(process.env.PORT || 3000, () => console.log("Digital World Engine Online"));
-});
+// --- SERVER STARTUP ---
+const PORT = process.env.PORT || 3000;
+mongoose.connect(process.env.MONGO_URI)
+    .then(() => {
+        console.log("🌌 MongoDB Linked. Digital World Online.");
+        app.listen(PORT);
+    })
+    .catch(err => console.error("Database Connection Failed:", err));
