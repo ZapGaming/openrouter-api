@@ -1,11 +1,9 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const axios = require('axios'); // REPLACED Google SDK with Axios
 require('dotenv').config();
 
 const app = express();
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
 app.use(express.json());
 
 // --- DATABASE SCHEMAS ---
@@ -44,19 +42,40 @@ const elementProfiles = {
     "celestial": "✨", "bio-hazard": "☣️", "plasma": "⚡", "glitch": "👾"
 };
 
-// --- CHAOTIC AI HELPER ---
-async function askGemini(prompt) {
+// --- NEW HELPER: TALK TO YOUR CUSTOM PROXY ---
+async function askProxy(prompt) {
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-        const result = await model.generateContent(prompt + ". CRITICAL: RETURN RAW JSON ONLY. NO MARKDOWN, NO BACKTICKS.");
-        let text = result.response.text().trim().replace(/```json|```/g, "");
+        // We use 'tier: high' (Gemini) or 'mid' (GPT) for best JSON results
+        const response = await axios.post(process.env.PROXY_URL, {
+            prompt: prompt + ". CRITICAL: RETURN RAW JSON ONLY. NO MARKDOWN, NO EXPLANATION, NO BACKTICKS.",
+            tier: 'high', 
+            persona: "You are a Game Backend API. You are incapable of speaking normal text. You only output valid JSON data."
+        }, {
+            headers: { 
+                'Authorization': `Bearer ${process.env.PROXY_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: 15000 // 15 second timeout to prevent hanging
+        });
+
+        // The proxy returns { ... response: "string content" ... }
+        let text = response.data.response;
+        
+        // Sanitize: Remove ```json and ``` wrapper if the model adds them
+        text = text.trim().replace(/```json|```/g, "");
+        
         return JSON.parse(text);
+
     } catch (e) {
-        console.error("AI ERROR:", e);
+        console.error("PROXY ERROR:", e.response ? e.response.data : e.message);
+        // Fallback glitch item if API fails/timeout
         return { 
-            name: "Rift Fragment", en: "Static Ghost", 
-            nar: "The reality around you cracked, forcing a desperate struggle!", 
-            win: Math.random() > 0.5, atk: 50, hp: 200 
+            name: "404 Glitch", 
+            element: "glitch",
+            en: "Connection Entity", 
+            nar: "The connection to the ether severed... a glitch appears!", 
+            win: false, atk: 10, hp: 100, 
+            bio: "A being formed from packet loss." 
         };
     }
 }
@@ -66,7 +85,7 @@ async function askGemini(prompt) {
 app.post('/spawn', async (req, res) => {
     const id = req.body.id || req.body.user_id;
     try {
-        const data = await askGemini(`Create a unique monster based on: ${req.body.description || "Random Entity"}. Elements: Inferno, Abyssal, Glitch, Chrono, Bio-hazard. Format: {"name":"N","element":"E","elLore":"L","atk":65,"def":40,"hp":320,"bio":"B"}`);
+        const data = await askProxy(`Create a unique monster based on: ${req.body.description || "Random Entity"}. Elements: Inferno, Abyssal, Glitch, Chrono, Bio-hazard. Format: {"name":"N","element":"E","elLore":"L","atk":65,"def":40,"hp":320,"bio":"B"}`);
         let user = await User.findOne({ discordId: String(id) }) || new User({ discordId: String(id) });
         const monster = { ...data, level: 1, emoji: elementProfiles[data.element.toLowerCase()] || "💎" };
         user.monsters.push(monster);
@@ -94,7 +113,7 @@ app.post('/battle', async (req, res) => {
     const winChance = (pMon.atk + rngFactor) > 85;
 
     try {
-        const battle = await askGemini(`Combat: ${pMon.name} vs a unique random horror. NOT ${pMon.name}. Format: {"en":"EnemyName","nar":"Action description","win":${winChance}}`);
+        const battle = await askProxy(`Combat: ${pMon.name} vs a unique random horror. NOT ${pMon.name}. Format: {"en":"EnemyName","nar":"Action description","win":${winChance}}`);
         let reward = 0;
         if (battle.win) {
             reward = Math.floor(Math.random() * 300) + 150;
@@ -114,7 +133,7 @@ app.post('/evolve', async (req, res) => {
     if (!user || !user.monsters[idx] || user.essence < 1000) return res.json({ text: "❌ Need 1000 Essence." });
 
     const m = user.monsters[idx];
-    const evo = await askGemini(`Evolve ${m.name} (${m.element}) into a god-tier version. Format: {"name":"N","atk":${m.atk + 50},"hp":${m.hp + 150},"bio":"New Bio"}`);
+    const evo = await askProxy(`Evolve ${m.name} (${m.element}) into a god-tier version. Format: {"name":"N","atk":${m.atk + 50},"hp":${m.hp + 150},"bio":"New Bio"}`);
     user.monsters[idx] = { ...m, ...evo, level: m.level + 1 };
     user.essence -= 1000;
     user.markModified('monsters');
@@ -129,7 +148,7 @@ app.post('/merge', async (req, res) => {
     if (!user || !user.monsters[i1] || !user.monsters[i2] || i1 === i2) return res.json({ text: "❌ Select 2 unique monsters." });
 
     const m1 = user.monsters[i1]; const m2 = user.monsters[i2];
-    const fusion = await askGemini(`Fuse ${m1.name} and ${m2.name}. Format: {"name":"N","element":"Hybrid","atk":${m1.atk + m2.atk},"hp":${m1.hp + m2.hp}}`);
+    const fusion = await askProxy(`Fuse ${m1.name} and ${m2.name}. Format: {"name":"N","element":"Hybrid","atk":${m1.atk + m2.atk},"hp":${m1.hp + m2.hp}}`);
     user.monsters = user.monsters.filter((_, i) => i !== i1 && i !== i2);
     user.monsters.push({ ...fusion, level: 1, emoji: "🧬" });
     user.markModified('monsters');
@@ -137,7 +156,7 @@ app.post('/merge', async (req, res) => {
     res.json({ text: `🧬 **FUSION COMPLETE!** Created **${fusion.name}**!` });
 });
 
-// --- GUILD SYSTEM ---
+// --- GUILD SYSTEM (No AI, unchanged) ---
 
 app.post('/guild_create', async (req, res) => {
     const { id, name, reqEssence } = req.body;
@@ -193,18 +212,14 @@ app.post('/guild_shop', async (req, res) => {
     res.json({ text: `🔥 Buff **${buyItem}** activated!` });
 });
 
-// --- NEW/FIXED GUILD KICK ---
 app.post('/guild_kick', async (req, res) => {
     const { id, targetId } = req.body;
-    // Find guild where the sender is the OWNER
     const g = await Guild.findOne({ ownerId: String(id) });
     if (!g) return res.json({ text: "❌ Only the Guild Owner can kick members." });
     
-    if (String(id) === String(targetId)) return res.json({ text: "❌ You cannot kick yourself. Transfer ownership or disband instead." });
+    if (String(id) === String(targetId)) return res.json({ text: "❌ You cannot kick yourself." });
 
-    // Remove member from guild array
     g.members = g.members.filter(m => m !== String(targetId));
-    // Reset user's guildId
     await User.updateOne({ discordId: String(targetId) }, { guildId: null });
     await g.save();
     
