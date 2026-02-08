@@ -50,7 +50,7 @@ async function askProxy(prompt) {
             prompt: prompt + ". CRITICAL: RETURN RAW JSON ONLY. NO MARKDOWN, NO EXPLANATION, NO BACKTICKS.",
             tier: 'custom', 
             provider: 'aqua',
-            model: 'haiku-4.5',
+            model: 'gemini-3',
             persona: "You are a Game Backend API. You are incapable of speaking normal text. You only output valid JSON data."
         }, {
             headers: { 
