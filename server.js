@@ -28,8 +28,8 @@ const guildSchema = new mongoose.Schema({
 
 const bossSchema = new mongoose.Schema({
     name: { type: String, default: "The World Eater" },
-    hp: { type: Number, default: 10000 },
-    maxHp: { type: Number, default: 10000 },
+    hp: { type: Number, default: 1000 },
+    maxHp: { type: Number, default: 4000 },
     active: { type: Boolean, default: true }
 });
 
