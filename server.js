@@ -48,7 +48,7 @@ async function askProxy(prompt) {
         // We use 'tier: high' (Gemini) or 'mid' (GPT) for best JSON results
         const response = await axios.post(process.env.PROXY_URL, {
             prompt: prompt + ". CRITICAL: RETURN RAW JSON ONLY. NO MARKDOWN, NO EXPLANATION, NO BACKTICKS.",
-            tier: 'aqua', 
+            tier: 'aquanova', 
             persona: "You are a Game Backend API. You are incapable of speaking normal text. You only output valid JSON data."
         }, {
             headers: { 
