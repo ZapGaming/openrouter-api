@@ -55,7 +55,7 @@ async function askProxy(prompt) {
                 'Authorization': `Bearer ${process.env.PROXY_KEY}`,
                 'Content-Type': 'application/json'
             },
-            timeout: 15000 // 15 second timeout to prevent hanging
+            timeout: 0 // 0 second timeout beacause why not
         });
 
         // The proxy returns { ... response: "string content" ... }
